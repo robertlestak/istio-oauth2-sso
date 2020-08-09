@@ -49,7 +49,41 @@ docker push docker-registry.example.com/istio-oauth2:latest
 
 ### Configure
 
+#### config.json
+
 Fill in `devops/k8s/secret.yaml` with your OAuth application information.
+
+`config.json` contains all of the OAuth2 IAP configurations for the application.
+
+Multiple OAuth providers can be configured in the `config.json` list.
+
+```
+[
+  {
+    "OAuth2": {
+      "ClientID": "",
+      "ClientSecret": "",
+      "Endpoint": {
+          "AuthURL": "https://login.microsoftonline.com/common/oauth2/authorize",
+          "TokenURL": "https://login.microsoftonline.com/common/oauth2/token"
+      },
+      "RedirectURL": "http://localhost/callback"
+    },
+    "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
+    "CookieName": "oauth2_sso",
+    "DefaultRedirectURI": "https://example.com",
+    "SSODomains": [".example.com"]
+  }
+]
+```
+
+The first object in the list is the default if no ClientID is specified.
+
+However, you can configure your envoy filter to redirect to `https://login.example.com/oauth2/{ClientID}` and this will authenticate the user with the application configured with this ClientID.
+
+This enables you to configure different IDP applications and scopes and grant granular access to users on a service-by-service basis while still maintaining a seamless SSO across the mesh.
+
+If you are using multiple additive SSO integrations, it is recommended that you rename the cookie and header of your additional filters so that they do not conflict with the default SSO integration.
 
 Edit `devops/k8s/istio-envoy-filter.yaml` to include your redirect URL for unauthenticated users, and your `workloadSelector` if desired. The default will attach the filter to any Pod labeled `oauth2sso: enabled`.
 
@@ -114,9 +148,6 @@ The API is being improved and optimized. All effort will be taken to ensure brea
 
 This is the first version of this implementation and there are already a few features that are clearly needed:
 
-- Enable multiple Oauth2 integrations
-    - Current implementation only supports a single global OAuth2 integration at IDP session manager API layer.
-    - This should be improved so different filters can be created for different IDP configurations, all using the same OAuth2 session API service.
 - Mutilple SSO domain support
     - Currently the Oauth2 API layer will only set a single SSO cookie on one domain.
     - API layer should be updated to accept a list of domains, with a small agent running on each domain so that the main API layer can iterate through each domain and set proper SSO cookie

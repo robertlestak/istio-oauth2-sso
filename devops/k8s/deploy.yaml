@@ -33,6 +33,10 @@ spec:
         envFrom:
         - secretRef:
             name: oauth2-sso
+        volumeMounts:
+        - name: config
+          mountPath: "/opt/sso"
+          readOnly: true
         readinessProbe:
           tcpSocket:
             port: 80
@@ -43,5 +47,12 @@ spec:
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 20
+      volumes:
+        - name: config
+          secret:
+              secretName: oauth2-sso
+              items:
+              - key: config.json
+                path: config.json
       imagePullSecrets:
       - name: regcred
