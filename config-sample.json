@@ -12,6 +12,15 @@
       "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
       "CookieName": "oauth2_sso",
       "DefaultRedirectURI": "https://example.com",
-      "SSODomains": [".example.com"]
+      "SSODomains": [
+        {
+          "Domain": "localhost",
+          "Endpoint": "http://localhost/sso"
+        },
+        {
+          "Domain": ".example.com",
+          "Endpoint": "https://example.com/sso"
+        }
+      ]
     }
   ]

@@ -65,11 +65,13 @@ For larger deployments which require central state management, use the `redis` s
 
 For local testing, the `filesystem` state store will store all sessions on disk. This provides central state management but cannot horizontally scale.
 
+`SESSION_KEY` must be 32 bytes or larger. This key is used for both the API session management, as well as to encrypt the SSO cookie as it is passed between SSO domains.
+
 #### config.json
 
 Fill in `devops/k8s/secret.yaml` with your OAuth application information.
 
-`config.json` contains all of the OAuth2 IAP configurations for the application.
+`config.json` contains all of the OAuth2 IdP configurations for the application.
 
 Multiple OAuth providers can be configured in the `config.json` list.
 
@@ -88,12 +90,21 @@ Multiple OAuth providers can be configured in the `config.json` list.
     "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
     "CookieName": "oauth2_sso",
     "DefaultRedirectURI": "https://example.com",
-    "SSODomains": [".example.com"]
+    "SSODomains": [
+      {
+        "Domain": "localhost",
+        "Endpoint": "http://localhost/sso"
+      },
+      {
+        "Domain": "example.com",
+        "Endpoint": "https://login.example.com/sso"
+      }
+    ]
   }
 ]
 ```
 
-The first object in the list is the default if no ClientID is specified.
+The first object in the list is the default if no ClientID is specified on initial login.
 
 However, you can configure your envoy filter to redirect to `https://login.example.com/oauth2/{ClientID}` and this will authenticate the user with the application configured with this ClientID.
 
@@ -102,6 +113,20 @@ This enables you to configure different IDP applications and scopes and grant gr
 If you are using multiple additive SSO integrations, it is recommended that you rename the cookie and header of your additional filters so that they do not conflict with the default SSO integration.
 
 Edit `devops/k8s/istio-envoy-filter.yaml` to include your redirect URL for unauthenticated users, and your `workloadSelector` if desired. The default will attach the filter to any Pod labeled `oauth2sso: enabled`.
+
+#### Multiple SSO Domain Support
+
+*NOTE: This feature is not required. If a single `SSODomain` object with a nil / empty `Endpoint` is provided it is assumed to be a single-domain SSO and the cookie will be set directly by the API with no additional redirects beyond redirecting the user back to the original resource.*
+
+`SSODomains` accepts a list of SSO Domain objects, which defines the `Domain` the SSO cookie should be set on, and `Endpoint` which exposes a SSO configuration API endpoint to set cookies on that domain.
+
+When a user logs in, this will iterate through the list of `SSODomains` and `307` the user to the `Endpoint` with a `?sso=[encoded-data]` Query Param containing an encrypted JSON representation of the `SSODomainConfig` object.
+
+It is expected that a process on the target endpoint will accept the encrypted SSO configuration, decrypt with the `SESSION_KEY`, set the proper cookie(s) on that domain, and redirect the user to the remaining SSO endpoints defined in `SSODomainConfig.SSODomains` with the properly encrypted configuration object.
+
+To enable, create a record on each target domain which points back to this API, and then configure the `VirtualService` for this API to listen on all supported SSO domains.
+
+Once the user has SSO cookies on all supported domains, they will be redirected back to their originally-requested resource.
 
 ### Deploy
 
@@ -162,15 +187,20 @@ The API is being improved and optimized. All effort will be taken to ensure brea
 
 #### Upcoming Features
 
-This is the first version of this implementation and there are already a few features that are clearly needed:
+This is the first version of this implementation and there are already a few features that are clearly needed. Expect the following list to ebb and flow as more features are defined and subsequently implemented.
 
-- Mutilple SSO domain support
-    - Currently the Oauth2 API layer will only set a single SSO cookie on one domain.
-    - API layer should be updated to accept a list of domains, with a small agent running on each domain so that the main API layer can iterate through each domain and set proper SSO cookie
+If you have a feature request, please raise it as a GitHub issue for proper tracking.
+
 - More intelligent 403 handling
     - Currently if the application returns a `403` to envoy, it will immediately `302` to the IDP.
     - This does not account for valid app-internal `403` errors.
     - Additional logic should be added around the redirect functionality
+- Management API
+    - Currently, all OAuth2 application configuration is managed with the `config.json` file which is assumed to be injected as a Kuberenetes Secret.
+    - However as the list of OAuth2 integrations grows, it will become cumbersome managing a JSON configuration file, patching secrets, restarting pods, etc.
+    - While I am generally averse to adding infrastructure / complexity to what is supposed to be a lean interchange process, I can see the long term benefit in some centralized configuration management.
+    - Chicken and Egg - how to auth the API which itself manages federated auth configuration
+    - For now, using k8s operator RBAC and constructs to manage configuration
 
 ### Credits
 
