@@ -1,0 +1,76 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: oauth2-sso
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      oauth2sso: enabled
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+    patch:
+      operation: INSERT_BEFORE
+      value:
+       name: envoy.lua
+       typed_config:
+         "@type": "type.googleapis.com/envoy.config.filter.http.lua.v2.Lua"
+         inlineCode: |
+            function strSplit(i, d)
+              if d == nil then
+                d = "%s"
+              end
+              local t={}
+              for s in string.gmatch(i, "([^"..d.."]+)") do
+                table.insert(t, s)
+              end
+              return t
+            end
+            function envoy_on_request(h)
+              hd = h:headers()
+              streamInfo = h:streamInfo()
+              conn = h:connection()
+              dm = streamInfo:dynamicMetadata()
+              dm:set("request_headers", "request_authority", hd:get(":authority"))
+              dm:set("request_headers", "request_path", hd:get(":path"))
+              p = "http"
+              if conn:ssl() ~= nil then
+                p = "https"
+              else
+                fp = hd:get("x-forwarded-proto")
+                if fp ~= nil then
+                  p = fp
+                end
+              end
+              dm:set("request_headers", "proto", p)
+              c = hd:get("cookie")
+              if c ~= nil then
+                sc = strSplit(c, ";")
+                jwt = nil
+                for i, ci in ipairs(sc) do
+                  if string.find(ci, "oauth2_sso") ~= nil then
+                    jwt = string.gsub(ci, "oauth2_sso=", "")
+                  end
+                end
+                if jwt ~= nil then
+                  j = string.gsub(jwt, "^ ", "")
+                  hd:replace("x-oauth2-sso", j)
+                end
+              end
+            end
+
+            function envoy_on_response(h) 
+              hd = h:headers()
+              streamInfo = h:streamInfo()
+              dm = streamInfo:dynamicMetadata()
+              d = dm:get("request_headers")
+              if hd:get(":status") == "403" then
+                if d ~= nil then
+                  hd:replace(":status", "302")
+                  r = d["proto"].."://"..d["request_authority"]..d["request_path"]
+                  hd:replace("location", "https://login.example.com/?redirect="..r)
+                end
+              end
+            end

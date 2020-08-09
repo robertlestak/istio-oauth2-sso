@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-sso
+  namespace: istio-system
+  labels:
+    app: oauth2-sso
+spec:
+  type: ClusterIP
+  selector:
+    app: oauth2-sso
+  ports:
+    - protocol: TCP
+      port: 80
+      name: http
+      targetPort: 80
