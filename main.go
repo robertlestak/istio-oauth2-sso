@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/boj/redistore.v1"
+
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 
@@ -225,14 +227,39 @@ func readCfgs(f string) error {
 	return nil
 }
 
+func redisStore() {
+	s, err := redistore.NewRediStore(100, "tcp", os.Getenv("SESSION_STORE_REDIS"), "", []byte(os.Getenv("SESSION_KEY")), nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	store = s
+}
+
+func fsStore() {
+	f := sessions.NewFilesystemStore("", []byte(os.Getenv("SESSION_KEY")), nil)
+	f.MaxLength(0)
+	store = f
+}
+
+func cookieStore() {
+	store = sessions.NewCookieStore([]byte(os.Getenv("SESSION_KEY")))
+}
+
 func init() {
 	cerr := readCfgs(os.Getenv("OAUTH2_CONFIG_FILE"))
 	if cerr != nil {
 		log.Fatal(cerr)
 	}
-	fsStore := sessions.NewFilesystemStore("", []byte(os.Getenv("SESSION_KEY")), nil)
-	fsStore.MaxLength(0)
-	store = fsStore
+	switch os.Getenv("SESSION_STORE_TYPE") {
+	case "redis":
+		redisStore()
+	case "filesystem":
+		fsStore()
+	case "cookie":
+		cookieStore()
+	default:
+		cookieStore()
+	}
 	gob.Register(&oauth2.Token{})
 }
 
@@ -242,5 +269,8 @@ func main() {
 	r.HandleFunc("/oauth2/{ClientID}", IndexHandler)
 	r.HandleFunc("/logout", LogoutHandler)
 	r.HandleFunc("/callback", CallbackHandler)
+	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	})
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), r))
 }

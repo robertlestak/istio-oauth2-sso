@@ -1,0 +1,37 @@
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: oauth2-sso-redis
+  namespace: istio-system
+  labels:
+    app: oauth2-sso-redis
+spec:
+  hosts:
+  - "oauth2-sso-redis.istio-system.svc.cluster.local"
+  gateways:
+  - mesh
+  tcp:
+  - match:
+    - port: 6379
+    route:
+    - destination:
+        port:
+          number: 6379
+        host: oauth2-sso-redis.istio-system.svc.cluster.local
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: oauth2-sso-redis
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: oauth2-sso-redis
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: 
+        - "cluster.local/ns/istio-system/sa/oauth2-sso"

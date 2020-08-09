@@ -4,7 +4,7 @@ metadata:
   name: oauth2-sso
   namespace: istio-system
   labels:
-    app: login
+    app: oauth2-sso
     version: v1
 spec:
   replicas: 3
@@ -18,8 +18,9 @@ spec:
         app: oauth2-sso
         version: v1
     spec:
+      serviceAccountName: oauth2-sso
       containers:
-      - name: login
+      - name: oauth2-sso
         image: docker-registry.example.com/oauth2-sso:v0.0.1
         resources:
           limits:

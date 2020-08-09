@@ -1,3 +1,4 @@
 secret.yaml
 .env
 .DS_Store
+config.json

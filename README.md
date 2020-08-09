@@ -49,6 +49,22 @@ docker push docker-registry.example.com/istio-oauth2:latest
 
 ### Configure
 
+#### State Management
+
+When a user is redirected to the IDP, their redirect URL, IDP ClientID, and token must be stored in state during the handshake and redirect process.
+
+The session store is configurable with `SESSION_STORE_TYPE`.
+
+The default session state store is `cookie`. This will store the state on the client device as an encrypted cookie. This has the benefit of not requiring any additional resources, and is completely stateless from the service scalability perspective.
+
+However the one downside of this is that you cannot revoke client sessions from the central state store - however as you have federated authx to the IDP, session revocation can be managed at that layer.
+
+Additionally, some IDP tokens exceed the length of the cookie and will not be stored.
+
+For larger deployments which require central state management, use the `redis` state store and configure `SESSION_STORE_REDIS` to point at your redis instance.
+
+For local testing, the `filesystem` state store will store all sessions on disk. This provides central state management but cannot horizontally scale.
+
 #### config.json
 
 Fill in `devops/k8s/secret.yaml` with your OAuth application information.

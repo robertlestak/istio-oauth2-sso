@@ -1,0 +1,56 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-sso-redis-v1
+  namespace: istio-system
+  labels:
+    app: oauth2-sso-redis
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oauth2-sso-redis
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: oauth2-sso-redis
+        version: v1
+    spec:
+      containers:
+      - name: redis
+        image: redis:6
+        resources:
+          limits:
+            memory: 500Mi
+            cpu: 50m
+          requests:
+            memory: 500Mi
+            cpu: 50m
+        command: ["redis-server"]
+        args: ["--appendonly", "yes"]
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+          - mountPath: "/data"
+            name: redis
+      volumes:
+        - name: redis
+          persistentVolumeClaim:
+            claimName: oauth2-sso-redis
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: oauth2-sso-redis
+  namespace: istio-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
