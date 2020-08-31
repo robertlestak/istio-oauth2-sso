@@ -350,17 +350,20 @@ func getTokenFromBody(r *http.Response) (*oauth2.Token, error) {
 func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session")
 	if r.FormValue("state") != SessionState(session) {
-		http.Error(w, "invalid callback state", http.StatusBadRequest)
+		log.Println("invalid callback state")
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
 	resp, err := createReq(r, session)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("createReq error: %v", err), http.StatusBadRequest)
+		log.Printf("createReq error: %v\n", err)
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
 	token, terr := getTokenFromBody(resp)
 	if terr != nil {
-		http.Error(w, fmt.Sprintf("getTokenFromBody error: %v", terr), http.StatusBadRequest)
+		log.Printf("getTokenFromBody error: %v\n", terr)
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
 	}
 	session.Values["token"] = &token
