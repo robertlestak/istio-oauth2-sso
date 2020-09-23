@@ -138,6 +138,7 @@ func createReq(r *http.Request, session *sessions.Session) (*http.Response, erro
 	form.Set("client_id", config.OAuth2.ClientID)
 	form.Set("client_secret", config.OAuth2.ClientSecret)
 	form.Set("code", r.FormValue("code"))
+	form.Set("scope", strings.Join(config.OAuth2.Scopes, ","))
 	form.Set("redirect_uri", config.OAuth2.RedirectURL)
 	req, err := http.NewRequest(http.MethodPost, config.OAuth2.Endpoint.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -413,9 +414,6 @@ func readCfgs(f string) error {
 	}
 	if len(cfgs) < 1 {
 		return errors.New("default oauth2 provider required")
-	}
-	for _, v := range cfgs {
-		v.OAuth2.Scopes = []string{"User.Read"}
 	}
 	return nil
 }
