@@ -50,8 +50,8 @@ spec:
                 sc = strSplit(c, ";")
                 jwt = nil
                 for i, ci in ipairs(sc) do
-                  if string.find(ci, "oauth2_sso") ~= nil then
-                    jwt = string.gsub(ci, "oauth2_sso=", "")
+                  if string.match(ci, "^oauth2_sso") ~= nil then
+                    jwt = string.gsub(ci, "^oauth2_sso=", "")
                   end
                 end
                 if jwt ~= nil then
@@ -70,6 +70,7 @@ spec:
                 if d ~= nil then
                   hd:replace(":status", "302")
                   r = d["proto"].."://"..d["request_authority"]..d["request_path"]
+                  hd:replace("Set-Cookie", "oauth2_sso=; Expires=0")
                   hd:replace("location", "https://login.example.com/?redirect="..r)
                 end
               end
