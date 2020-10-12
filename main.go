@@ -87,8 +87,11 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// if token is empty redirect to IDP, otherwise redirect back to application
 	if token == nil {
-		http.Redirect(w, r, config.OAuth2.AuthCodeURL(SessionState(session), oauth2.AccessTypeOnline), http.StatusTemporaryRedirect)
+		u := config.OAuth2.AuthCodeURL(SessionState(session), oauth2.AccessTypeOnline)
+		log.Printf("LoginHandler auth ClientID=%v, redirect_uri=%v, auth_code_url=%v\n", session.Values["ClientID"], session.Values["redirect_uri"], u)
+		http.Redirect(w, r, u, http.StatusTemporaryRedirect)
 	} else {
+		log.Printf("LoginHandler redirect ClientID=%v, redirect_uri=%v\n", session.Values["ClientID"], config.DefaultRedirectURI)
 		http.Redirect(w, r, config.DefaultRedirectURI, http.StatusTemporaryRedirect)
 	}
 }
@@ -140,6 +143,12 @@ func createReq(r *http.Request, session *sessions.Session) (*http.Response, erro
 	form.Set("code", r.FormValue("code"))
 	form.Set("scope", strings.Join(config.OAuth2.Scopes, ","))
 	form.Set("redirect_uri", config.OAuth2.RedirectURL)
+	log.Printf("Login client_id=%v, scope=%v, redirect_uri=%v token_url=%v\n",
+		config.OAuth2.ClientID,
+		strings.Join(config.OAuth2.Scopes, ","),
+		config.OAuth2.RedirectURL,
+		config.OAuth2.Endpoint.TokenURL,
+	)
 	req, err := http.NewRequest(http.MethodPost, config.OAuth2.Endpoint.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
@@ -254,6 +263,7 @@ func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Ses
 // SetCookie sets a SSO cookie on the current SSODomain object
 // naively assuming it is running on the proper endpoint for the domain
 func (sso *SSODomainConfig) SetCookie(w http.ResponseWriter, r *http.Request) {
+	log.Printf("SetCookie Name=%v, Domain=%v\n", sso.CookieName, sso.SSODomains[0].Domain)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sso.CookieName,
 		Value:    sso.Token.AccessToken,
@@ -269,6 +279,7 @@ func (sso *SSODomainConfig) SetCookie(w http.ResponseWriter, r *http.Request) {
 // to that endpoint. CNAME endpoints back to this API ingress
 func (sso *SSODomainConfig) SetCookies(w http.ResponseWriter, r *http.Request) {
 	var nsso []SSODomain
+	log.Printf("SetCookies SSODomains=%v\n", sso.SSODomains)
 	// if no resources remain in list, redirect back to root to be sent to application
 	if len(sso.SSODomains) == 0 {
 		http.Redirect(w, r, sso.RedirectURL, http.StatusTemporaryRedirect)
@@ -375,12 +386,24 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 
 // getAppByClientID retrieves a configured OAuth2 application by the ClientID
 func getAppByClientID(i string) (*OAuth2Config, error) {
+	log.Printf("getAppByClientID %v\n", i)
 	for _, v := range cfgs {
 		if v.OAuth2.ClientID == i {
+			log.Printf("getAppByClientID %v: %+v\n", i, v.OAuth2)
 			return v, nil
 		}
 	}
 	return nil, errors.New("client not found")
+}
+
+func logConfig(c *OAuth2Config) OAuth2Config {
+	return OAuth2Config{
+		OAuth2:             c.OAuth2,
+		LogoutURL:          c.LogoutURL,
+		CookieName:         c.CookieName,
+		DefaultRedirectURI: c.DefaultRedirectURI,
+		SSODomains:         c.SSODomains,
+	}
 }
 
 // configFromRequest retrieves the OAuth2 application configuration
@@ -395,8 +418,10 @@ func configFromRequest(r *http.Request) (*OAuth2Config, error) {
 		if e != nil {
 			return config, e
 		}
+		log.Printf("configFromRequest %+v\n", logConfig(config))
 	} else {
 		config = cfgs[0]
+		log.Printf("configFromRequest default %+v\n", logConfig(config))
 	}
 	return config, nil
 }
