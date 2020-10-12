@@ -50,8 +50,8 @@ spec:
                 sc = strSplit(c, ";")
                 jwt = nil
                 for i, ci in ipairs(sc) do
-                  if string.match(ci, "^oauth2_sso") ~= nil then
-                    jwt = string.gsub(ci, "^oauth2_sso=", "")
+                  if string.find(ci, "oauth2_sso") ~= nil then
+                    jwt = string.gsub(ci, "oauth2_sso=", "")
                   end
                 end
                 if jwt ~= nil then
