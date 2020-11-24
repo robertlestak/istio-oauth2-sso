@@ -43,12 +43,19 @@ type SSODomain struct {
 	Endpoint string `json:"Endpoint"`
 }
 
+// Token contains both the OAuth2 access token as well as ID Token
+type Token struct {
+	oauth2.Token
+	IDToken   string `json:"id_token"`
+	UserToken string `json:"user_token"`
+}
+
 // SSODomainConfig contains the configuration for SSO Cookies
 type SSODomainConfig struct {
-	Token       *oauth2.Token `json:"Token"`
-	CookieName  string        `json:"CookieName"`
-	RedirectURL string        `json:"RedirectURL"`
-	SSODomains  []SSODomain   `json:"SSODomains"`
+	Token       *Token      `json:"Token"`
+	CookieName  string      `json:"CookieName"`
+	RedirectURL string      `json:"RedirectURL"`
+	SSODomains  []SSODomain `json:"SSODomains"`
 }
 
 // OAuth2Config contains the base OAuth2 config as well as additional information for session
@@ -58,6 +65,7 @@ type OAuth2Config struct {
 	CookieName         string         `json:"CookieName"`
 	DefaultRedirectURI string         `json:"DefaultRedirectURI"`
 	SSODomains         []SSODomain    `json:"SSODomains"`
+	DesiredToken       string         `json:"DesiredToken"`
 }
 
 // SessionState returns the client's session in a base64 encoded string
@@ -74,6 +82,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	session, _ := store.Get(r, "session")
 	session.Values["redirect_uri"] = config.DefaultRedirectURI
+	session.Values["desired_token"] = config.DesiredToken
 	session.Values["ClientID"] = config.OAuth2.ClientID
 	sessions.Save(r, w)
 	var token *oauth2.Token
@@ -222,7 +231,7 @@ func encodeSSOConfig(sso *SSODomainConfig) (string, error) {
 
 // setSSOCookies iterates through all configured SSO domains / endpoints and sets SSO
 // cookie on all supported domains before redirecting user back to original resource
-func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Session, token *oauth2.Token) {
+func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Session, token *Token) {
 	var cid string
 	// retrieve ClientID from session
 	if v, ok := session.Values["ClientID"]; ok {
@@ -237,6 +246,14 @@ func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Ses
 	var redirectURI = "/"
 	if v, ok := session.Values["redirect_uri"]; ok {
 		redirectURI = v.(string)
+	}
+	if v, ok := session.Values["desired_token"]; ok {
+		dt := v.(string)
+		if dt == "id_token" {
+			token.UserToken = token.IDToken
+		} else {
+			token.UserToken = token.AccessToken
+		}
 	}
 	session.Values["redirect_uri"] = nil
 	sessions.Save(r, w)
@@ -256,7 +273,7 @@ func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Ses
 func (sso *SSODomainConfig) SetCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sso.CookieName,
-		Value:    sso.Token.AccessToken,
+		Value:    sso.Token.UserToken,
 		Expires:  time.Now().Add(time.Minute * 60),
 		Domain:   sso.SSODomains[0].Domain,
 		HttpOnly: true,
@@ -331,7 +348,7 @@ func SSOHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTokenFromBody retrieves the OAuth2 token from the HTTP response body
-func getTokenFromBody(r *http.Response) (*oauth2.Token, error) {
+func getTokenFromBody(r *http.Response) (*Token, error) {
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
 		bd, err := ioutil.ReadAll(r.Body)
@@ -340,7 +357,7 @@ func getTokenFromBody(r *http.Response) (*oauth2.Token, error) {
 		}
 		return nil, fmt.Errorf("error creating token: %v", string(bd))
 	}
-	var token oauth2.Token
+	var token Token
 	if err := json.NewDecoder(r.Body).Decode(&token); err != nil {
 		return nil, fmt.Errorf("json error: %v", err)
 	}
