@@ -1,18 +1,16 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
-	"log"
+
+	log "github.com/sirupsen/logrus"
+
 	"net/http"
 	"net/url"
 	"os"
@@ -37,27 +35,22 @@ var (
 	ssokey []byte
 )
 
-// SSODomain contains the configuration for a SSO domain
-type SSODomain struct {
-	Domain   string `json:"Domain"`
-	Endpoint string `json:"Endpoint"`
-}
-
 // SSODomainConfig contains the configuration for SSO Cookies
 type SSODomainConfig struct {
 	Token       *oauth2.Token `json:"Token"`
 	CookieName  string        `json:"CookieName"`
 	RedirectURL string        `json:"RedirectURL"`
-	SSODomains  []SSODomain   `json:"SSODomains"`
+	SSODomain   string        `json:"SSODomain"`
 }
 
 // OAuth2Config contains the base OAuth2 config as well as additional information for session
 type OAuth2Config struct {
 	OAuth2             *oauth2.Config `json:"OAuth2"`
+	ID                 string         `json:"ID"`
 	LogoutURL          string         `json:"LogoutURL"`
 	CookieName         string         `json:"CookieName"`
 	DefaultRedirectURI string         `json:"DefaultRedirectURI"`
-	SSODomains         []SSODomain    `json:"SSODomains"`
+	SSODomain          string         `json:"SSODomain"`
 }
 
 // SessionState returns the client's session in a base64 encoded string
@@ -67,6 +60,7 @@ func SessionState(session *sessions.Session) string {
 
 // LoginHandler handles calls to the root to either redirect to IDP or back to application after auth
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("LoginHandler")
 	config, err := configFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -74,7 +68,8 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	session, _ := store.Get(r, "session")
 	session.Values["redirect_uri"] = config.DefaultRedirectURI
-	session.Values["ClientID"] = config.OAuth2.ClientID
+	session.Values["ID"] = config.ID
+	log.Printf("sessions.Save: %+v", session.Values)
 	sessions.Save(r, w)
 	var token *oauth2.Token
 	if r.FormValue("redirect") != "" {
@@ -88,10 +83,10 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// if token is empty redirect to IDP, otherwise redirect back to application
 	if token == nil {
 		u := config.OAuth2.AuthCodeURL(SessionState(session), oauth2.AccessTypeOnline)
-		log.Printf("LoginHandler auth ClientID=%v, redirect_uri=%v, auth_code_url=%v\n", session.Values["ClientID"], session.Values["redirect_uri"], u)
+		log.Printf("LoginHandler auth ClientID=%v, redirect_uri=%v, auth_code_url=%v\n", session.Values["ID"], session.Values["redirect_uri"], u)
 		http.Redirect(w, r, u, http.StatusTemporaryRedirect)
 	} else {
-		log.Printf("LoginHandler redirect ClientID=%v, redirect_uri=%v\n", session.Values["ClientID"], config.DefaultRedirectURI)
+		log.Printf("LoginHandler redirect ClientID=%v, redirect_uri=%v\n", session.Values["ID"], config.DefaultRedirectURI)
 		http.Redirect(w, r, config.DefaultRedirectURI, http.StatusTemporaryRedirect)
 	}
 }
@@ -100,7 +95,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	session, _ := store.Get(r, "session")
 	var cid string
-	if v, ok := session.Values["ClientID"]; ok {
+	if v, ok := session.Values["ID"]; ok {
 		cid = v.(string)
 	}
 	// remove cookie and session
@@ -112,7 +107,8 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 		Domain:   os.Getenv("SSO_COOKIE_DOMAIN"),
 		HttpOnly: true,
-		Secure:   true,
+		//Secure:   true,
+		Secure: false,
 	})
 	sessions.Save(r, w)
 	a, err := getAppByClientID(cid)
@@ -127,8 +123,9 @@ func LogoutHandler(w http.ResponseWriter, r *http.Request) {
 // createReq creates a new OAuth login request with the IDP
 // defined for the user's session
 func createReq(r *http.Request, session *sessions.Session) (*http.Response, error) {
+	log.Printf("createReq %+v", session.Values)
 	var cid string
-	if v, ok := session.Values["ClientID"]; ok {
+	if v, ok := session.Values["ID"]; ok {
 		cid = v.(string)
 	}
 	config, err := getAppByClientID(cid)
@@ -161,80 +158,11 @@ func createReq(r *http.Request, session *sessions.Session) (*http.Response, erro
 	return resp, nil
 }
 
-// encrypt is an aes encryption helper function
-func encrypt(key, text []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	b := base64.StdEncoding.EncodeToString(text)
-	ciphertext := make([]byte, aes.BlockSize+len(b))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, err
-	}
-	cfb := cipher.NewCFBEncrypter(block, iv)
-	cfb.XORKeyStream(ciphertext[aes.BlockSize:], []byte(b))
-	return ciphertext, nil
-}
-
-// decrypt is an aes decription helper function
-func decrypt(key, text []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(text) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short")
-	}
-	iv := text[:aes.BlockSize]
-	text = text[aes.BlockSize:]
-	cfb := cipher.NewCFBDecrypter(block, iv)
-	cfb.XORKeyStream(text, text)
-	data, err := base64.StdEncoding.DecodeString(string(text))
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-// decodeSSOConfig decodes the SSO configuration parameter to SSODomainConfig object
-func decodeSSOConfig(s string) (SSODomainConfig, error) {
-	var sso SSODomainConfig
-	bd, err := decrypt(ssokey, []byte(s))
-	if err != nil {
-		return sso, err
-	}
-	jerr := json.Unmarshal(bd, &sso)
-	if jerr != nil {
-		return sso, jerr
-	}
-	return sso, nil
-}
-
-// encodeSSOConfig encodes a SSODomainConfig object into a string parameter
-// that can be passed between SSO domains to properly set cookies
-func encodeSSOConfig(sso *SSODomainConfig) (string, error) {
-	var s string
-	bd, jerr := json.Marshal(&sso)
-	if jerr != nil {
-		return s, jerr
-	}
-	//s = base64.StdEncoding.EncodeToString(bd)
-	ed, err := encrypt(ssokey, bd)
-	if err != nil {
-		return s, err
-	}
-	s = string(ed)
-	return s, nil
-}
-
-// setSSOCookies iterates through all configured SSO domains / endpoints and sets SSO
-// cookie on all supported domains before redirecting user back to original resource
-func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Session, token *oauth2.Token) {
+// setSSOCookie sets SSO cookie on all supported domains before redirecting user back to original resource
+func setSSOCookie(w http.ResponseWriter, r *http.Request, session *sessions.Session, token *oauth2.Token) {
 	var cid string
 	// retrieve ClientID from session
-	if v, ok := session.Values["ClientID"]; ok {
+	if v, ok := session.Values["ID"]; ok {
 		cid = v.(string)
 	}
 	// retrieve OAuth2 application for client
@@ -253,92 +181,26 @@ func setSSOCookies(w http.ResponseWriter, r *http.Request, session *sessions.Ses
 	sso := &SSODomainConfig{
 		CookieName:  config.CookieName,
 		Token:       token,
-		SSODomains:  config.SSODomains,
+		SSODomain:   config.SSODomain,
 		RedirectURL: redirectURI,
 	}
 	// set SSO cookie on all supported domains
-	sso.SetCookies(w, r)
+	sso.SetCookie(w, r)
+	http.Redirect(w, r, redirectURI, http.StatusFound)
 }
 
 // SetCookie sets a SSO cookie on the current SSODomain object
 // naively assuming it is running on the proper endpoint for the domain
 func (sso *SSODomainConfig) SetCookie(w http.ResponseWriter, r *http.Request) {
-	log.Printf("SetCookie Name=%v, Domain=%v\n", sso.CookieName, sso.SSODomains[0].Domain)
+	log.Printf("SetCookie Name=%v, Domain=%v\n", sso.CookieName, sso.SSODomain)
 	http.SetCookie(w, &http.Cookie{
 		Name:     sso.CookieName,
 		Value:    sso.Token.AccessToken,
 		Expires:  time.Now().Add(time.Minute * 60),
-		Domain:   sso.SSODomains[0].Domain,
+		Domain:   sso.SSODomain,
 		HttpOnly: true,
 		Secure:   true,
 	})
-}
-
-// SetCookies iterates through SSO Domains and sets cookies on all domains
-// This assumes the configured endpoints are operational, and with 307 the user
-// to that endpoint. CNAME endpoints back to this API ingress
-func (sso *SSODomainConfig) SetCookies(w http.ResponseWriter, r *http.Request) {
-	var nsso []SSODomain
-	log.Printf("SetCookies SSODomains=%v\n", sso.SSODomains)
-	// if no resources remain in list, redirect back to root to be sent to application
-	if len(sso.SSODomains) == 0 {
-		http.Redirect(w, r, sso.RedirectURL, http.StatusTemporaryRedirect)
-		return
-	} else if len(sso.SSODomains) > 1 {
-		// if resources do remain in list, pop first off and update list
-		nsso = sso.SSODomains[1:len(sso.SSODomains)]
-	}
-	sso.SetCookie(w, r)
-	// Create new SSO domain config list object
-	nssod := &SSODomainConfig{
-		CookieName:  sso.CookieName,
-		Token:       sso.Token,
-		RedirectURL: sso.RedirectURL,
-		SSODomains:  nsso,
-	}
-	// encode new sso object to Base64 string
-	cd, cerr := encodeSSOConfig(nssod)
-	if cerr != nil {
-		http.Error(w, cerr.Error(), http.StatusBadRequest)
-		return
-	}
-	// if Endpoint is nil, assume single domain configuration
-	// and redirect back to original URL
-	if sso.SSODomains[0].Endpoint == "" {
-		http.Redirect(w, r, sso.RedirectURL, http.StatusTemporaryRedirect)
-		return
-	}
-	u, uerr := url.Parse(sso.SSODomains[0].Endpoint)
-	if uerr != nil {
-		http.Error(w, uerr.Error(), http.StatusBadRequest)
-		return
-	}
-	// encode URL with sso config
-	form := url.Values{}
-	form.Add("sso", cd)
-	fd := form.Encode()
-	u.RawQuery = fd
-	http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
-}
-
-// SSOHandler handles the request to iterate through SSO domains and set cookie
-func SSOHandler(w http.ResponseWriter, r *http.Request) {
-	// get sso list from query string
-	sso := r.FormValue("sso")
-	var ssod SSODomainConfig
-	// decode base64 sso configuration
-	if sso != "" {
-		var e error
-		ssod, e = decodeSSOConfig(sso)
-		if e != nil {
-			http.Error(w, e.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		http.Error(w, "sso configuration required", http.StatusBadRequest)
-		return
-	}
-	ssod.SetCookies(w, r)
 }
 
 // getTokenFromBody retrieves the OAuth2 token from the HTTP response body
@@ -380,16 +242,17 @@ func CallbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	session.Values["token"] = &token
 	session.Save(r, w)
-	setSSOCookies(w, r, session, token)
-	//http.Redirect(w, r, redirectURI, http.StatusFound)
+	setSSOCookie(w, r, session, token)
 }
 
 // getAppByClientID retrieves a configured OAuth2 application by the ClientID
+// for configurations which have multiple ClientIDs, a separate `id` field enables
+// selecting a specific configuration.
 func getAppByClientID(i string) (*OAuth2Config, error) {
 	log.Printf("getAppByClientID %v\n", i)
 	for _, v := range cfgs {
-		if v.OAuth2.ClientID == i {
-			log.Printf("getAppByClientID %v: %+v\n", i, v.OAuth2)
+		if v.ID == i {
+			log.Printf("getAppByClientID %v: %+v\n", v.ID, v.OAuth2)
 			return v, nil
 		}
 	}
@@ -398,11 +261,12 @@ func getAppByClientID(i string) (*OAuth2Config, error) {
 
 func logConfig(c *OAuth2Config) OAuth2Config {
 	return OAuth2Config{
+		ID:                 c.ID,
 		OAuth2:             c.OAuth2,
 		LogoutURL:          c.LogoutURL,
 		CookieName:         c.CookieName,
 		DefaultRedirectURI: c.DefaultRedirectURI,
-		SSODomains:         c.SSODomains,
+		SSODomain:          c.SSODomain,
 	}
 }
 
@@ -411,8 +275,10 @@ func logConfig(c *OAuth2Config) OAuth2Config {
 // If ClientID is not provided, defaults to first application
 func configFromRequest(r *http.Request) (*OAuth2Config, error) {
 	v := mux.Vars(r)
+	log.Println("configFromRequest")
 	var config *OAuth2Config
 	if v["ClientID"] != "" {
+		log.Printf("configFromRequest ClientID=%s", v["ClientID"])
 		var e error
 		config, e = getAppByClientID(v["ClientID"])
 		if e != nil {
@@ -495,7 +361,6 @@ func main() {
 	r.HandleFunc("/oauth2/{ClientID}", LoginHandler)
 	r.HandleFunc("/logout", LogoutHandler)
 	r.HandleFunc("/callback", CallbackHandler)
-	r.HandleFunc("/sso", SSOHandler)
 	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "ok")
 	})

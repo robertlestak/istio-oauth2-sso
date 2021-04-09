@@ -78,6 +78,7 @@ Multiple OAuth providers can be configured in the `config.json` list.
 ```
 [
   {
+    "ID": "my_custom_id",
     "OAuth2": {
       "ClientID": "",
       "ClientSecret": "",
@@ -90,23 +91,14 @@ Multiple OAuth providers can be configured in the `config.json` list.
     "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
     "CookieName": "oauth2_sso",
     "DefaultRedirectURI": "https://example.com",
-    "SSODomains": [
-      {
-        "Domain": "localhost",
-        "Endpoint": "http://localhost/sso"
-      },
-      {
-        "Domain": "example.com",
-        "Endpoint": "https://login.example.com/sso"
-      }
-    ]
+    "SSODomain": ".example.com"
   }
 ]
 ```
 
 The first object in the list is the default if no ClientID is specified on initial login.
 
-However, you can configure your envoy filter to redirect to `https://login.example.com/oauth2/{ClientID}` and this will authenticate the user with the application configured with this ClientID.
+However, you can configure your envoy filter to redirect to `https://login.example.com/oauth2/{ID}` and this will authenticate the user with the application configured with this ID.
 
 This enables you to configure different IDP applications and scopes and grant granular access to users on a service-by-service basis while still maintaining a seamless SSO across the mesh.
 
@@ -116,17 +108,7 @@ Edit `devops/k8s/istio-envoy-filter.yaml` to include your redirect URL for unaut
 
 #### Multiple SSO Domain Support
 
-*NOTE: This feature is not required. If a single `SSODomain` object with a nil / empty `Endpoint` is provided it is assumed to be a single-domain SSO and the cookie will be set directly by the API with no additional redirects beyond redirecting the user back to the original resource.*
-
-`SSODomains` accepts a list of SSO Domain objects, which defines the `Domain` the SSO cookie should be set on, and `Endpoint` which exposes a SSO configuration API endpoint to set cookies on that domain.
-
-When a user logs in, this will iterate through the list of `SSODomains` and `307` the user to the `Endpoint` with a `?sso=[encoded-data]` Query Param containing an encrypted JSON representation of the `SSODomainConfig` object.
-
-It is expected that a process on the target endpoint will accept the encrypted SSO configuration, decrypt with the `SESSION_KEY`, set the proper cookie(s) on that domain, and redirect the user to the remaining SSO endpoints defined in `SSODomainConfig.SSODomains` with the properly encrypted configuration object.
-
 To enable, create a record on each target domain which points back to this API, and then configure the `VirtualService` for this API to listen on all supported SSO domains.
-
-Once the user has SSO cookies on all supported domains, they will be redirected back to their originally-requested resource.
 
 ### Deploy
 
