@@ -299,6 +299,7 @@ func readCfgs(f string) error {
 	if berr != nil {
 		return berr
 	}
+	bd = []byte(os.ExpandEnv(string(bd)))
 	jerr := json.Unmarshal(bd, &cfgs)
 	if jerr != nil {
 		return jerr
