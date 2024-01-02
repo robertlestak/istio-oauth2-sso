@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 
 	log "github.com/sirupsen/logrus"
 
@@ -207,7 +207,7 @@ func (sso *SSODomainConfig) SetCookie(w http.ResponseWriter, r *http.Request) {
 func getTokenFromBody(r *http.Response) (*oauth2.Token, error) {
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
-		bd, err := ioutil.ReadAll(r.Body)
+		bd, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +295,7 @@ func configFromRequest(r *http.Request) (*OAuth2Config, error) {
 // readCfgs reads the OAuth2 application configuration file
 // and parses into object in memory
 func readCfgs(f string) error {
-	bd, berr := ioutil.ReadFile(f)
+	bd, berr := os.ReadFile(f)
 	if berr != nil {
 		return berr
 	}
