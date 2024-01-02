@@ -16,7 +16,7 @@ spec:
       value:
        name: envoy.lua
        typed_config:
-         "@type": "type.googleapis.com/envoy.config.filter.http.lua.v2.Lua"
+         "@type": "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
          inlineCode: |
             function strSplit(i, d)
               if d == nil then
@@ -50,7 +50,8 @@ spec:
                 sc = strSplit(c, ";")
                 jwt = nil
                 for i, ci in ipairs(sc) do
-                  if string.find(ci, "oauth2_sso") ~= nil then
+                  ci = string.gsub(ci, "%s+", "")
+                  if string.find(ci, "^oauth2_sso=") ~= nil then
                     jwt = string.gsub(ci, "oauth2_sso=", "")
                   end
                 end

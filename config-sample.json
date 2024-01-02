@@ -1,5 +1,14 @@
-[
+{
+  "configs": [
     {
+      "ID": "UUID",
+      "Vault": {
+        "VaultAddr": "https://vault.example.com",
+        "AuthMethod": "cluster-name",
+        "Role": "istio-oauth-reader",
+        "Namespace": "",
+        "Path": "devops/test/foobar"
+      },
       "OAuth2": {
         "ClientID": "",
         "ClientSecret": "",
@@ -24,3 +33,4 @@
       ]
     }
   ]
+}
