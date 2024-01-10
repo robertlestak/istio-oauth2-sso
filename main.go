@@ -763,7 +763,9 @@ func main() {
 		fmt.Fprint(w, "ok")
 	})
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowOriginFunc: func(origin string) bool {
+			return true
+		},
 		AllowedHeaders:   []string{"*"},
 		AllowCredentials: true,
 		Debug:            false,
