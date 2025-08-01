@@ -1,0 +1,20 @@
+{
+  "configs": [
+    {
+      "ID": "test-app",
+      "OAuth2": {
+        "ClientID": "test-client-id",
+        "ClientSecret": "test-client-secret",
+        "Endpoint": {
+            "AuthURL": "https://example.com/auth",
+            "TokenURL": "https://example.com/token"
+        },
+        "RedirectURL": "http://localhost/callback"
+      },
+      "LogoutURL": "https://example.com/logout",
+      "CookieName": "oauth2_sso",
+      "DefaultRedirectURI": "https://example.com",
+      "SSODomain": ".example.com"
+    }
+  ]
+}

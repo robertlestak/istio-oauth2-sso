@@ -1,118 +1,188 @@
 # Istio OAuth2 SSO
 
-A small external API service and Istio `EnvoyFilter` to enable federated OAuth2 authentication / SSO for workloads running inside an Istio service mesh.
+A secure, transparent OAuth2 authentication service for Istio service mesh that provides federated SSO for any application without requiring code changes.
 
-## Background
+## Features
 
-Istio natively supports `JWT` Validation at edge, however currently does not implement the full OIDC flow.
+- **🔐 Transparent Token Refresh** - Automatic token renewal without user intervention
+- **🛡️ Secure by Design** - Refresh tokens stored server-side, never exposed to clients
+- **🔄 Zero-Code Integration** - Works with any application behind Istio
+- **🌐 Cross-Domain SSO** - Single sign-on across multiple domains and services
+- **⚡ High Performance** - Lightweight with automatic cleanup and efficient operations
+- **🔧 Easy Configuration** - Simple JSON configuration with multiple OAuth2 providers
 
-For applications which natively support OIDC an Istio `AuthorizationPolicy` can be used to validate the user's JWT at edge, however if the application does not handle the OIDC lifecycle / flow, Istio cannot natively redirect the user to the IDP, nor can it handle cross-application SSO cookies.
+## How It Works
 
-To enable OIDC auth on legacy applications or those which do not natively integrate with a federated IDP, this service and filter will enable Istio mesh operators to enforce an `AuthorizationPolicy` on workloads and handle the full OIDC lifecycle, regardless of the underlying application's support for OIDC.
+This service sits between your Istio ingress gateway and your applications, handling the complete OAuth2/OIDC flow:
 
-As Google has stated that native OIDC integration is not on the Istio road map, and the solution developed by IBM relies on the now-deprecated Mixer, this solution aims to be a more generic, lighter weight, and pluggable implementation of OAuth2 using currently-supported native Istio resources and constructs.
+1. **Unauthenticated requests** are redirected to your OAuth2 provider (Azure AD, Google, etc.)
+2. **After authentication**, users are redirected back with an authorization code
+3. **Access tokens** are stored in secure HTTP-only cookies
+4. **Refresh tokens** are stored server-side and linked to user sessions
+5. **Token refresh** happens automatically and transparently
+6. **Applications receive** the JWT token via the `x-oauth2-sso` header
 
-## Architecture
+Your applications never need to handle OAuth2 flows - they just receive authenticated requests with JWT tokens.
 
-This solution relies heavily on native Istio resources as defined in Istio 1.6. 
+## Quick Start
 
-As the Istio API moves quickly, you may need to make changes to the code to suit your specific Istio environment.
+### 1. Basic Usage
 
-<img src="./docs/architecture/istio-oauth2.png" width="700px">
+Once deployed, users accessing protected applications will be automatically redirected to authenticate. The service handles everything transparently:
 
-## Alternatives
+```bash
+# User visits protected app
+curl https://myapp.example.com/dashboard
 
-This is one option of implementing SSO / federated authx in Istio, but is not the only solution.
-
-Salmaan Rashid has a [great write up](https://medium.com/google-cloud/external-authorization-server-with-istio-1159b21682bb) about using an external authentication server pathched into envoy at the ingress gateway to provide a very similar experience.
-
-Google has also suggested the use of [Identity Aware Proxy](https://cloud.google.com/iap/docs/concepts-overview) as a layer above the Istio ingress gateway, however the native Istio and envoy implementation was chosen here for vendor agnosticism and a more native Istio approach.
-
-Google also raised the option of using `envoy-wasm` to provide the required capability entirely within the envoy filter. At the time of writing this, `envoy-wasm` is not merged back into upstream `envoy` and would therefore require building from source and patching all istio clusters to use a custom `envoy-wasm` image. This will probably be a moot point in a few weeks when `envoy-wasm` support is merged to upstream.
-
-However the Lua filter + external API server approach was chosen over `envoy-wasm` to reduce the overhead and latency of the envoy proxy on every request. 
-
-By shifting all of the OAuth logic to a separate scalable service, the envoy lua filter to handle token and redirect logic can remain lean, and the "heavy lifting" of the OAuth process can live independent of envoy.
-
-[This GitHub issue](https://github.com/istio/istio/issues/8619) contains great discussion on this topic and includes a Lua example that is the basis for the Lua envoy filter in this implementation.
-
-## Usage
-
-### Build
-
+# Automatically redirected to OAuth provider (Azure AD, Google, etc.)
+# After authentication, redirected back to original URL
+# Application receives request with JWT in x-oauth2-sso header
 ```
-# build image
+
+### 2. Client-Side Integration
+
+For applications that need to handle token refresh or check authentication status:
+
+#### Automatic Token Refresh
+```javascript
+async function makeAuthenticatedRequest(url, options = {}) {
+    let response = await fetch(url, { 
+        credentials: 'include', 
+        ...options 
+    });
+    
+    // If token expired, automatically refresh and retry
+    if (response.status === 401) {
+        const refreshResponse = await fetch('/refresh/YOUR_APP_ID', {
+            method: 'POST',
+            credentials: 'include'
+        });
+        
+        if (refreshResponse.ok) {
+            // Retry original request with new token
+            response = await fetch(url, { 
+                credentials: 'include', 
+                ...options 
+            });
+        } else {
+            // Redirect to login
+            window.location.href = '/oauth2/YOUR_APP_ID';
+        }
+    }
+    
+    return response;
+}
+```
+
+#### Manual Token Refresh
+```javascript
+// Refresh token manually
+const response = await fetch('/refresh/YOUR_APP_ID', {
+    method: 'POST',
+    credentials: 'include'
+});
+
+if (response.ok) {
+    console.log('Token refreshed successfully');
+}
+```
+
+#### Check Authentication Status
+```javascript
+// Get current token status
+const response = await fetch('/token-status', {
+    credentials: 'include'
+});
+
+const status = await response.json();
+console.log('Session ID:', status.session_id);
+console.log('App ID:', status.app_id);
+console.log('Has refresh token:', status.has_refresh_token);
+```
+
+### 3. Application Integration
+
+Your applications receive the JWT token in the `x-oauth2-sso` header:
+
+```python
+# Python Flask example
+@app.route('/api/user')
+def get_user():
+    jwt_token = request.headers.get('x-oauth2-sso')
+    if not jwt_token:
+        return {'error': 'Not authenticated'}, 401
+    
+    # Decode and validate JWT
+    user_info = decode_jwt(jwt_token)
+    return {'user': user_info}
+```
+
+```javascript
+// Node.js Express example
+app.get('/api/user', (req, res) => {
+    const jwtToken = req.headers['x-oauth2-sso'];
+    if (!jwtToken) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    // Decode and validate JWT
+    const userInfo = decodeJWT(jwtToken);
+    res.json({ user: userInfo });
+});
+```
+
+### 4. Logout
+
+```javascript
+// Logout user and clear all tokens
+window.location.href = '/logout/YOUR_APP_ID';
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/oauth2/{ID}` | GET | Initiate OAuth2 login flow |
+| `/callback` | GET | OAuth2 callback handler |
+| `/refresh/{ID}` | POST | Refresh access token transparently |
+| `/logout/{ID}` | GET | Logout and clear session |
+| `/token-status` | GET | Get current token status |
+| `/healthz` | GET | Health check endpoint |
+
+## Security Features
+
+### Transparent Token Refresh
+
+- **Server-side storage**: Refresh tokens never leave the server
+- **Automatic renewal**: Tokens refresh transparently without user action
+- **Session isolation**: Each user session has independent token storage
+- **Background cleanup**: Expired tokens are automatically removed
+
+### Secure Cookie Handling
+
+- **HttpOnly cookies**: Cannot be accessed by JavaScript
+- **Secure flag**: Only sent over HTTPS
+- **SameSite protection**: CSRF protection
+- **Domain scoping**: Cookies scoped to your SSO domain
+
+### Session Management
+
+- **Unique session IDs**: Each user gets a unique session identifier
+- **Server-side association**: Session IDs link to stored refresh tokens
+- **Automatic expiration**: Sessions expire after 24 hours of inactivity
+
+## Installation & Configuration
+
+### 1. Build and Deploy
+
+```bash
+# Build image
 docker build . -t docker-registry.example.com/istio-oauth2:latest
-# push to registry
+
+# Push to registry
 docker push docker-registry.example.com/istio-oauth2:latest
-```
 
-### Configure
-
-#### State Management
-
-When a user is redirected to the IDP, their redirect URL, IDP ClientID, and token must be stored in state during the handshake and redirect process.
-
-The session store is configurable with `SESSION_STORE_TYPE`.
-
-The default session state store is `cookie`. This will store the state on the client device as an encrypted cookie. This has the benefit of not requiring any additional resources, and is completely stateless from the service scalability perspective.
-
-However the one downside of this is that you cannot revoke client sessions from the central state store - however as you have federated authx to the IDP, session revocation can be managed at that layer.
-
-Additionally, some IDP tokens exceed the length of the cookie and will not be stored.
-
-For larger deployments which require central state management, use the `redis` state store and configure `SESSION_STORE_REDIS` to point at your redis instance.
-
-For local testing, the `filesystem` state store will store all sessions on disk. This provides central state management but cannot horizontally scale.
-
-`SESSION_KEY` must be 32 bytes or larger. This key is used for both the API session management, as well as to encrypt the SSO cookie as it is passed between SSO domains.
-
-#### config.json
-
-Fill in `devops/k8s/secret.yaml` with your OAuth application information.
-
-`config.json` contains all of the OAuth2 IdP configurations for the application.
-
-Multiple OAuth providers can be configured in the `config.json` list.
-
-```
-[
-  {
-    "ID": "my_custom_id",
-    "OAuth2": {
-      "ClientID": "",
-      "ClientSecret": "",
-      "Endpoint": {
-          "AuthURL": "https://login.microsoftonline.com/common/oauth2/authorize",
-          "TokenURL": "https://login.microsoftonline.com/common/oauth2/token"
-      },
-      "RedirectURL": "http://localhost/callback"
-    },
-    "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
-    "CookieName": "oauth2_sso",
-    "DefaultRedirectURI": "https://example.com",
-    "SSODomain": ".example.com"
-  }
-]
-```
-
-The first object in the list is the default if no ClientID is specified on initial login.
-
-However, you can configure your envoy filter to redirect to `https://login.example.com/oauth2/{ID}` and this will authenticate the user with the application configured with this ID.
-
-This enables you to configure different IDP applications and scopes and grant granular access to users on a service-by-service basis while still maintaining a seamless SSO across the mesh.
-
-If you are using multiple additive SSO integrations, it is recommended that you rename the cookie and header of your additional filters so that they do not conflict with the default SSO integration.
-
-Edit `devops/k8s/istio-envoy-filter.yaml` to include your redirect URL for unauthenticated users, and your `workloadSelector` if desired. The default will attach the filter to any Pod labeled `oauth2sso: enabled`.
-
-#### Multiple SSO Domain Support
-
-To enable, create a record on each target domain which points back to this API, and then configure the `VirtualService` for this API to listen on all supported SSO domains.
-
-### Deploy
-
-```
+# Deploy to Kubernetes
 kubectl apply \
     -f devops/k8s/istio-envoy-filter.yaml \
     -f devops/k8s/secret.yaml \
@@ -120,42 +190,251 @@ kubectl apply \
     -f devops/k8s/service.yaml
 ```
 
-Create a `VirtualService` according to your mesh configuration to route to your `oauth2-sso` service. This `VirtualService` must be accessible for unauthenticated users, as this is what will handle the user's OIDC flow.
+### 2. Configuration
 
-Ensure you have configured your callback URLs in both the API layer and in your OAuth2 provider.
+#### Environment Variables
 
-### Mesh Configuration
+```bash
+# Required
+OAUTH2_CONFIG_FILE=/etc/config/config.json
+SESSION_KEY=your-32-byte-or-longer-encryption-key
 
-Once deployed, users trying to access a workload with the `oauth2sso: enabled` label will be redirected to the IDP. After a successful log in, a `oauth2_sso` cookie will be set on the domain defined for the mesh, and the user will be redirected back to the original page.
-
-The `EnvoyFilter` will then take the `oauth2_sso` cookie from the request and modify the request headers to add this as a `x-oauth2-sso` header. 
-
-Your `RequestAuthentication` will need to be configured to use this header. Example:
-
+# Optional
+SESSION_STORE_TYPE=cookie  # cookie, redis, or filesystem
+SESSION_STORE_REDIS=redis:6379  # if using redis
+PORT=8080
 ```
-apiVersion: "security.istio.io/v1beta1"
-kind: "RequestAuthentication"
+
+#### OAuth2 Configuration (`config.json`)
+
+```json
+{
+  "configs": [
+    {
+      "ID": "my-app",
+      "OAuth2": {
+        "ClientID": "your-oauth2-client-id",
+        "ClientSecret": "your-oauth2-client-secret",
+        "Endpoint": {
+          "AuthURL": "https://login.microsoftonline.com/common/oauth2/authorize",
+          "TokenURL": "https://login.microsoftonline.com/common/oauth2/token"
+        },
+        "RedirectURL": "https://your-domain.com/callback"
+      },
+      "LogoutURL": "https://login.microsoftonline.com/common/oauth2/logout",
+      "CookieName": "oauth2_sso",
+      "DefaultRedirectURI": "https://your-domain.com",
+      "SSODomain": ".your-domain.com"
+    }
+  ]
+}
+```
+
+### 3. Istio Configuration
+
+#### Enable OAuth2 for Applications
+
+Label your applications to enable OAuth2 protection:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: grafana
-  namespace: monitoring
+  name: my-app
+spec:
+  template:
+    metadata:
+      labels:
+        oauth2sso: enabled  # This enables OAuth2 protection
+    spec:
+      containers:
+      - name: my-app
+        image: my-app:latest
+```
+
+#### Configure JWT Validation
+
+```yaml
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: my-app-auth
 spec:
   selector:
     matchLabels:
-      app: grafana
+      app: my-app
   jwtRules:
-  - issuer: "https://sts.windows.net/APP_ID/"
-    jwksUri: "https://sts.windows.net/APP_ID/discovery/v2.0/keys"
+  - issuer: "https://sts.windows.net/YOUR_TENANT_ID/"
+    jwksUri: "https://sts.windows.net/YOUR_TENANT_ID/discovery/v2.0/keys"
     fromHeaders:
     - name: x-oauth2-sso
 ```
 
-#### Auth Header: x-oauth2-sso
+### 4. Session Storage Options
 
-The reasoning for using a custom header for the SSO JWT over the default `Authorization: Bearer ...` is to ensure that the SSO token injection does not conflict with existing application authx implementations.
+#### Cookie Store (Default)
+- **Pros**: No additional infrastructure required, stateless
+- **Cons**: Cannot revoke sessions centrally, cookie size limits
+- **Use for**: Small deployments, development
 
-If an application behind this auth layer implements its own authentication scheme, it can continue to do so without conflicting with the additional SSO layer above it.
+#### Redis Store
+- **Pros**: Central session management, session revocation, horizontal scaling
+- **Cons**: Requires Redis infrastructure
+- **Use for**: Production deployments, multiple replicas
 
-Additionally, if the application implements its own integration with the same IDP as the top-level SSO this integration provides, the additional authx of the application-specific scopes is a seamless SSO into that role.
+```bash
+SESSION_STORE_TYPE=redis
+SESSION_STORE_REDIS=redis-cluster:6379
+```
+
+#### Filesystem Store
+- **Pros**: Central session management, no additional infrastructure
+- **Cons**: Cannot scale horizontally, single point of failure
+- **Use for**: Single-instance deployments, testing
+
+```bash
+SESSION_STORE_TYPE=filesystem
+```
+
+## Advanced Usage
+
+### Multiple OAuth2 Providers
+
+Configure multiple OAuth2 providers for different applications:
+
+```json
+{
+  "configs": [
+    {
+      "ID": "azure-app",
+      "OAuth2": {
+        "ClientID": "azure-client-id",
+        "Endpoint": {
+          "AuthURL": "https://login.microsoftonline.com/tenant/oauth2/authorize",
+          "TokenURL": "https://login.microsoftonline.com/tenant/oauth2/token"
+        }
+      }
+    },
+    {
+      "ID": "google-app", 
+      "OAuth2": {
+        "ClientID": "google-client-id",
+        "Endpoint": {
+          "AuthURL": "https://accounts.google.com/o/oauth2/auth",
+          "TokenURL": "https://oauth2.googleapis.com/token"
+        }
+      }
+    }
+  ]
+}
+```
+
+Access different providers:
+```bash
+# Azure AD login
+https://your-domain.com/oauth2/azure-app
+
+# Google login  
+https://your-domain.com/oauth2/google-app
+```
+
+### Cross-Domain SSO
+
+Enable SSO across multiple domains by configuring the SSO domain:
+
+```json
+{
+  "SSODomain": ".example.com"  // Works for app1.example.com, app2.example.com, etc.
+}
+```
+
+### Custom Redirect Handling
+
+Redirect users to specific URLs after authentication:
+
+```bash
+# Redirect to specific page after login
+https://your-domain.com/oauth2/my-app?redirect=https://your-domain.com/dashboard
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. "No session found" errors
+- Check that `oauth2_session_id` cookie is being set
+- Verify `SSODomain` configuration matches your domain
+- Ensure cookies are not being blocked by browser settings
+
+#### 2. Token refresh failures
+- Check that refresh tokens are being stored (call `/token-status`)
+- Verify OAuth2 provider supports refresh tokens
+- Check server logs for refresh token errors
+
+#### 3. Redirect loops
+- Verify `DefaultRedirectURI` is accessible
+- Check that applications are properly labeled with `oauth2sso: enabled`
+- Ensure Istio EnvoyFilter is applied correctly
+
+### Debug Endpoints
+
+```bash
+# Check service health
+curl https://your-oauth-service.com/healthz
+
+# Check token status (requires authentication)
+curl -b "oauth2_session_id=your-session-id" https://your-oauth-service.com/token-status
+
+# Manual token refresh
+curl -X POST -b "oauth2_session_id=your-session-id" https://your-oauth-service.com/refresh/your-app-id
+```
+
+### Logging
+
+Enable debug logging by setting log level:
+
+```bash
+# In your deployment
+env:
+- name: LOG_LEVEL
+  value: debug
+```
+
+## Architecture
+
+This solution relies on native Istio resources and sits between your Istio ingress gateway and your applications:
+
+<img src="./docs/architecture/istio-oauth2.png" width="700px">
+
+### How It Works
+
+1. **EnvoyFilter** intercepts requests to protected applications
+2. **OAuth2 Service** handles the complete OIDC flow with your identity provider
+3. **JWT tokens** are passed to applications via the `x-oauth2-sso` header
+4. **Refresh tokens** are stored securely server-side for transparent renewal
+
+## Background
+
+Istio natively supports JWT validation at the edge but doesn't implement the full OIDC flow. This service bridges that gap by:
+
+- Handling OAuth2/OIDC redirects and callbacks
+- Managing token lifecycle and refresh
+- Providing transparent SSO across multiple applications
+- Working with any application without code changes
+
+## Alternatives
+
+This is one approach to implementing SSO in Istio. Other options include:
+
+- **External Authorization Server** - Using Envoy's external auth filter
+- **Identity Aware Proxy** - Google Cloud's IAP service
+- **Envoy WASM** - Custom WASM filters (when available)
+
+This solution was chosen for its:
+- Vendor agnosticism
+- Native Istio integration
+- Lightweight approach
+- Scalable external service design
 
 ## Disclaimers and Notes
 
@@ -199,4 +478,3 @@ And of course, thanks to my team who have been integral to the Istio design, bui
 Feature requests, suggestions, and pull requests are welcome. 
 
 However if there is a feature you need immediately, it is recommended that you fork this repo, implement your changes there, and PR back here once your changes are tested and stable in your mesh.
-
